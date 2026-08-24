@@ -5,15 +5,15 @@ version: "3.8"
 # Follows EMP-52 (Semana 1) — prepares for Evolution API integration in Semana 2
 #
 # Memory budget (hard limits enforced by Docker):
-#   postgres:         MEM_LIMIT_POSTGRES  (default 256m)
-#   redis:            MEM_LIMIT_REDIS     (default 256m)
+#   chatwoot-db:      MEM_LIMIT_POSTGRES  (default 256m)
+#   chatwoot-redis:   MEM_LIMIT_REDIS     (default 256m)
 #   chatwoot-web:     MEM_LIMIT_WEB       (default 512m)
 #   chatwoot-worker:  MEM_LIMIT_WORKER    (default 512m)
 #   -----------------------------------------------
 #   Total ceiling:    ~1.5 GB
 #
-# If a container hits its limit Docker OOM-kills it and restart policy brings it back.
-# Tune these values in .env.chatwoot based on VPS available memory before deploying.
+# Service names are prefixed with "chatwoot-" to avoid DNS conflicts
+# when the chatwoot-web container is attached to the shared Traefik coolify network.
 
 x-chatwoot-env: &chatwoot-env
   env_file:
@@ -23,7 +23,7 @@ services:
   # ---------------------------------------------------------------------------
   # PostgreSQL
   # ---------------------------------------------------------------------------
-  postgres:
+  chatwoot-db:
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: ${MEM_LIMIT_POSTGRES:-256m}
@@ -33,7 +33,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-chatwoot_production}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - chatwoot_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chatwoot} -d ${POSTGRES_DB:-chatwoot_production}"]
       interval: 10s
@@ -46,14 +46,14 @@ services:
   # ---------------------------------------------------------------------------
   # Redis (required for Sidekiq + ActionCable)
   # ---------------------------------------------------------------------------
-  redis:
+  chatwoot-redis:
     image: redis:7-alpine
     restart: unless-stopped
     mem_limit: ${MEM_LIMIT_REDIS:-256m}
     memswap_limit: ${MEM_LIMIT_REDIS:-256m}
     command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 200mb --maxmemory-policy allkeys-lru
     volumes:
-      - redis_data:/data
+      - chatwoot_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -64,7 +64,7 @@ services:
       - chatwoot_net
 
   # ---------------------------------------------------------------------------
-  # Chatwoot Web (Rails + Puma)
+  # Chatwoot Web (Rails + Puma) — exposto via Traefik com SSL
   # ---------------------------------------------------------------------------
   chatwoot-web:
     image: chatwoot/chatwoot:v3.12.0
@@ -76,9 +76,9 @@ services:
     ports:
       - "${CHATWOOT_PORT:-3000}:3000"
     depends_on:
-      postgres:
+      chatwoot-db:
         condition: service_healthy
-      redis:
+      chatwoot-redis:
         condition: service_healthy
     volumes:
       - chatwoot_storage:/app/storage
@@ -89,8 +89,24 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.http-chatwoot.entryPoints=http
+      - traefik.http.routers.http-chatwoot.middlewares=redirect-to-https
+      - "traefik.http.routers.http-chatwoot.rule=Host(`chat.respondipravoce.com.br`)"
+      - traefik.http.routers.http-chatwoot.service=chatwoot-svc
+      - traefik.http.routers.https-chatwoot.entryPoints=https
+      - traefik.http.routers.https-chatwoot.middlewares=gzip
+      - "traefik.http.routers.https-chatwoot.rule=Host(`chat.respondipravoce.com.br`)"
+      - traefik.http.routers.https-chatwoot.service=chatwoot-svc
+      - traefik.http.routers.https-chatwoot.tls.certresolver=letsencrypt
+      - traefik.http.routers.https-chatwoot.tls=true
+      - traefik.http.services.chatwoot-svc.loadbalancer.server.port=3000
     networks:
       - chatwoot_net
+      - coolify
 
   # ---------------------------------------------------------------------------
   # Chatwoot Worker (Sidekiq — background jobs)
@@ -103,9 +119,9 @@ services:
     <<: *chatwoot-env
     command: bundle exec sidekiq -C config/sidekiq.yml
     depends_on:
-      postgres:
+      chatwoot-db:
         condition: service_healthy
-      redis:
+      chatwoot-redis:
         condition: service_healthy
     volumes:
       - chatwoot_storage:/app/storage
@@ -113,11 +129,13 @@ services:
       - chatwoot_net
 
 volumes:
-  postgres_data:
-  redis_data:
+  chatwoot_postgres_data:
+  chatwoot_redis_data:
   chatwoot_storage:
   chatwoot_public:
 
 networks:
   chatwoot_net:
     driver: bridge
+  coolify:
+    external: true
