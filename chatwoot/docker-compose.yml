@@ -84,7 +84,7 @@ services:
       - chatwoot_storage:/app/storage
       - chatwoot_public:/app/public
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/auth/sign_in"]
+      test: ["CMD-SHELL", "pgrep -f puma || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
