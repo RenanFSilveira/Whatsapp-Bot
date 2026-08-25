@@ -111,11 +111,18 @@ async def evolution_webhook(
     request: Request = ...,
     background_tasks: BackgroundTasks = ...,
 ) -> dict[str, str]:
-    """Receive Evolution API MESSAGES_UPSERT webhook and process asynchronously."""
+    """Receive Evolution API MESSAGES_UPSERT webhook and process asynchronously.
+
+    Accepts payload directly from Evolution API or forwarded via n8n.
+    n8n may wrap the original body under a 'body' key — both shapes are handled.
+    """
     try:
-        payload = await request.json()
+        raw = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    # n8n wraps the original Evolution API payload under raw["body"] when forwarding
+    payload = raw.get("body", raw) if isinstance(raw.get("body"), dict) else raw
 
     background_tasks.add_task(_process_event, instance, payload)
     return {"status": "received"}
