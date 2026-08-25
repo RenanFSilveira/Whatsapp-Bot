@@ -41,6 +41,21 @@ def get_whatsapp_instance(instance_name: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def get_instance_by_inbox(inbox_id: int) -> dict[str, Any] | None:
+    """Resolve instance name and tenant from a Chatwoot inbox_id (for outbound messages)."""
+    client = get_supabase()
+    response = (
+        client.table("whatsapp_instances")
+        .select("*")
+        .eq("chatwoot_inbox_id", inbox_id)
+        .eq("active", True)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    return rows[0] if rows else None
+
+
 def insert_whatsapp_event(
     *,
     tenant_id: str,

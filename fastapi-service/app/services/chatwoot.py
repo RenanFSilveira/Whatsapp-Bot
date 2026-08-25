@@ -34,13 +34,14 @@ def find_or_create_contact(*, phone: str, name: str) -> int:
             return results[0]["id"]
 
         # Create new contact
+        # Chatwoot wraps creation response under payload.contact
         r = client.post(
             f"{_base()}/contacts",
             headers=_headers(),
             json={"name": name or phone, "phone_number": f"+{phone}"},
         )
         r.raise_for_status()
-        return r.json()["id"]
+        return r.json()["payload"]["contact"]["id"]
 
 
 def find_or_create_conversation(*, contact_id: int, inbox_id: int) -> int:

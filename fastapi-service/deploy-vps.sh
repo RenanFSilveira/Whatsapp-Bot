@@ -38,7 +38,7 @@ FROM python:3.11-slim
 WORKDIR /app
 RUN pip install poetry==1.8.3 && poetry config virtualenvs.create false
 COPY pyproject.toml ./
-RUN poetry install --no-interaction --no-ansi --only main
+RUN poetry install --no-interaction --no-ansi --only main --no-root
 COPY app ./app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -84,7 +84,7 @@ CHATWOOT_API_TOKEN=KxEE6c49EaW82ng3SngnVruY
 CHATWOOT_ACCOUNT_ID=1
 EVOLUTION_API_URL=https://evo.respondipravoce.com.br
 EVOLUTION_API_KEY=CD642396E2FE-482C-A642-1BABE4D84D0E
-WEBHOOK_FORWARD_URL=
+WEBHOOK_FORWARD_URL=https://n8n.respondipravoce.com.br/webhook/whatsapp-grupos
 ENVFILE
 
 # ── app/__init__.py ───────────────────────────────────────────────────────────
@@ -172,6 +172,12 @@ def get_whatsapp_instance(instance_name: str) -> dict[str, Any] | None:
     rows = response.data or []
     return rows[0] if rows else None
 
+def get_instance_by_inbox(inbox_id: int) -> dict[str, Any] | None:
+    client = get_supabase()
+    response = client.table("whatsapp_instances").select("*").eq("chatwoot_inbox_id", inbox_id).eq("active", True).limit(1).execute()
+    rows = response.data or []
+    return rows[0] if rows else None
+
 def insert_whatsapp_event(*, tenant_id: str, instance_name: str, remote_jid: str,
                           message_id: str, direction: str, message_type: str,
                           chatwoot_conversation_id: int | None) -> None:
@@ -182,6 +188,27 @@ def insert_whatsapp_event(*, tenant_id: str, instance_name: str, remote_jid: str
         "direction": direction, "message_type": message_type,
         "chatwoot_conversation_id": chatwoot_conversation_id,
     }, on_conflict="message_id", ignore_duplicates=True).execute()
+PY
+
+# ── app/services/evolution.py ────────────────────────────────────────────────
+cat > "$DEPLOY_DIR/app/services/evolution.py" <<'PY'
+import logging
+import httpx
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+_TIMEOUT = httpx.Timeout(10.0)
+
+def _headers():
+    return {"apikey": settings.evolution_api_key, "Content-Type": "application/json"}
+
+def send_text_message(*, instance: str, phone: str, text: str) -> None:
+    phone_clean = "".join(c for c in phone if c.isdigit())
+    url = f"{settings.evolution_api_url}/message/sendText/{instance}"
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        r = client.post(url, headers=_headers(), json={"number": phone_clean, "text": text})
+        r.raise_for_status()
+        logger.info("Sent WhatsApp message via %s to %s", instance, phone_clean)
 PY
 
 # ── app/services/chatwoot.py ──────────────────────────────────────────────────
@@ -237,8 +264,9 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Path, Request
 from app.core.config import settings
-from app.db.supabase_client import get_whatsapp_instance, insert_whatsapp_event
+from app.db.supabase_client import get_instance_by_inbox, get_whatsapp_instance, insert_whatsapp_event
 from app.services.chatwoot import find_or_create_contact, find_or_create_conversation, post_message
+from app.services.evolution import send_text_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -299,6 +327,31 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
         except Exception:
             logger.warning("Forward to %s failed", settings.webhook_forward_url)
 
+def _process_chatwoot_event(payload: dict[str, Any]) -> None:
+    if payload.get("event") != "message_created":
+        return
+    if payload.get("message_type") != "outgoing":
+        return
+    if payload.get("sender", {}).get("type") != "user":
+        return
+    content: str = payload.get("content", "")
+    if not content or not content.strip():
+        return
+    conversation = payload.get("conversation", {})
+    inbox_id = conversation.get("inbox_id")
+    contact_phone: str = conversation.get("meta", {}).get("sender", {}).get("phone_number", "")
+    if not inbox_id or not contact_phone:
+        logger.warning("Chatwoot webhook missing inbox_id or phone — skipped")
+        return
+    instance_cfg = get_instance_by_inbox(inbox_id)
+    if not instance_cfg:
+        logger.warning("No whatsapp_instances for chatwoot_inbox_id=%s — skipped", inbox_id)
+        return
+    try:
+        send_text_message(instance=instance_cfg["instance_name"], phone=contact_phone, text=content)
+    except Exception:
+        logger.exception("Evolution API send error for inbox_id=%s", inbox_id)
+
 @router.post("/evolution/{instance}")
 async def evolution_webhook(instance: str = Path(...), request: Request = ...,
                             background_tasks: BackgroundTasks = ...) -> dict[str, str]:
@@ -308,6 +361,15 @@ async def evolution_webhook(instance: str = Path(...), request: Request = ...,
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
     payload = raw.get("body", raw) if isinstance(raw.get("body"), dict) else raw
     background_tasks.add_task(_process_event, instance, payload)
+    return {"status": "received"}
+
+@router.post("/chatwoot")
+async def chatwoot_webhook(request: Request = ..., background_tasks: BackgroundTasks = ...) -> dict[str, str]:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    background_tasks.add_task(_process_chatwoot_event, payload)
     return {"status": "received"}
 PY
 
