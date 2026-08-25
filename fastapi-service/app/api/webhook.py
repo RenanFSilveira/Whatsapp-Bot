@@ -48,6 +48,10 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
     message_obj: dict = data.get("message", {})
     message_type: str = data.get("messageType", "unknown")
 
+    # Skip messages sent by us — already in Chatwoot (agent typed them there); echoing back causes an infinite loop
+    if from_me:
+        return
+
     # Skip group messages
     if "@g.us" in remote_jid:
         return
