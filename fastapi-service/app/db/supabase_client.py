@@ -24,3 +24,45 @@ def get_mensagens(tenant_id: str, limit: int = 100) -> list[dict[str, Any]]:
         .execute()
     )
     return response.data or []
+
+
+def get_whatsapp_instance(instance_name: str) -> dict[str, Any] | None:
+    """Resolve tenant_id and chatwoot_inbox_id from instance name."""
+    client = get_supabase()
+    response = (
+        client.table("whatsapp_instances")
+        .select("*")
+        .eq("instance_name", instance_name)
+        .eq("active", True)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    return rows[0] if rows else None
+
+
+def insert_whatsapp_event(
+    *,
+    tenant_id: str,
+    instance_name: str,
+    remote_jid: str,
+    message_id: str,
+    direction: str,
+    message_type: str,
+    chatwoot_conversation_id: int | None,
+) -> None:
+    """Insert a lightweight routing record. Full message lives in Chatwoot."""
+    client = get_supabase()
+    client.table("whatsapp_mensagens").upsert(
+        {
+            "tenant_id": tenant_id,
+            "instance_name": instance_name,
+            "remote_jid": remote_jid,
+            "message_id": message_id,
+            "direction": direction,
+            "message_type": message_type,
+            "chatwoot_conversation_id": chatwoot_conversation_id,
+        },
+        on_conflict="message_id",
+        ignore_duplicates=True,
+    ).execute()

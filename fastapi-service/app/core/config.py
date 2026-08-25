@@ -10,5 +10,17 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_audience: str = "turbo-track"
 
+    # Chatwoot
+    chatwoot_url: str = ""
+    chatwoot_api_token: str = ""
+    chatwoot_account_id: int = 1
+
+    # Evolution API (for outbound messages)
+    evolution_api_url: str = ""
+    evolution_api_key: str = ""
+
+    # Forward incoming webhooks to this URL after processing (preserves existing n8n flow)
+    webhook_forward_url: str = ""
+
 
 settings = Settings()

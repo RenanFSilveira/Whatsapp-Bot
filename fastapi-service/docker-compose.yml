@@ -1,0 +1,29 @@
+version: "3.8"
+
+# Turbo Track AI — FastAPI service
+# Deploy via Coolify on the VPS (same network as Traefik)
+
+services:
+  turbotrack-api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.api-redirect-https.redirectscheme.scheme=https
+      - traefik.http.routers.http-turbotrack.entryPoints=http
+      - traefik.http.routers.http-turbotrack.middlewares=api-redirect-https
+      - "traefik.http.routers.http-turbotrack.rule=Host(`api.respondipravoce.com.br`)"
+      - traefik.http.routers.https-turbotrack.entryPoints=https
+      - "traefik.http.routers.https-turbotrack.rule=Host(`api.respondipravoce.com.br`)"
+      - traefik.http.routers.https-turbotrack.tls=true
+      - traefik.http.routers.https-turbotrack.tls.certresolver=letsencrypt
+      - traefik.http.services.turbotrack-svc.loadbalancer.server.port=8000
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
