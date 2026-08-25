@@ -91,14 +91,15 @@ services:
       start_period: 60s
     labels:
       - traefik.enable=true
-      - traefik.http.middlewares.gzip.compress=true
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.chatwoot-gzip.compress=true
+      - traefik.http.middlewares.chatwoot-redirect-https.redirectscheme.scheme=https
       - traefik.http.routers.http-chatwoot.entryPoints=http
-      - traefik.http.routers.http-chatwoot.middlewares=redirect-to-https
+      - traefik.http.routers.http-chatwoot.middlewares=chatwoot-redirect-https
       - "traefik.http.routers.http-chatwoot.rule=Host(`chat.respondipravoce.com.br`)"
       - traefik.http.routers.http-chatwoot.service=chatwoot-svc
       - traefik.http.routers.https-chatwoot.entryPoints=https
-      - traefik.http.routers.https-chatwoot.middlewares=gzip
+      - traefik.http.routers.https-chatwoot.middlewares=chatwoot-gzip
       - "traefik.http.routers.https-chatwoot.rule=Host(`chat.respondipravoce.com.br`)"
       - traefik.http.routers.https-chatwoot.service=chatwoot-svc
       - traefik.http.routers.https-chatwoot.tls.certresolver=letsencrypt
