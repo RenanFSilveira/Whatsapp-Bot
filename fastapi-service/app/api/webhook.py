@@ -68,11 +68,21 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
     message_obj: dict = data.get("message", {})
     message_type: str = data.get("messageType", "unknown")
 
-    # Skip messages sent by us — already in Chatwoot (agent typed them there); echoing back causes an infinite loop
+    # Forward to n8n first — all events including groups and outbound, same as Evolution API sent directly
+    if settings.webhook_forward_url:
+        try:
+            with httpx.Client(timeout=_FORWARD_TIMEOUT) as client:
+                client.post(settings.webhook_forward_url, json=payload)
+        except Exception:
+            logger.warning("Forward to %s failed", settings.webhook_forward_url)
+
+    # --- Chatwoot-only filters below (n8n already received the event above) ---
+
+    # Skip messages sent by us — already in Chatwoot; echoing back causes an infinite loop
     if from_me:
         return
 
-    # Skip group messages
+    # Skip group messages — Chatwoot is for 1:1 conversations
     if "@g.us" in remote_jid:
         return
 
@@ -80,7 +90,7 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
         logger.warning("Webhook missing remoteJid or id — skipped")
         return
 
-    # Idempotency guard: drop if this message_id was already processed (Evolution retry, n8n double-forward, etc.)
+    # Idempotency guard: drop if this message_id was already processed (Evolution retry, etc.)
     if _is_duplicate(message_id):
         logger.info("Duplicate message_id=%s — skipped", message_id)
         return
@@ -122,13 +132,6 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
     except Exception:
         logger.exception("Supabase insert error for message_id=%s", message_id)
 
-    # Forward to n8n (grupos flow) — fire-and-forget
-    if settings.webhook_forward_url:
-        try:
-            with httpx.Client(timeout=_FORWARD_TIMEOUT) as client:
-                client.post(settings.webhook_forward_url, json=payload)
-        except Exception:
-            logger.warning("Forward to %s failed", settings.webhook_forward_url)
 
 
 def _process_chatwoot_event(payload: dict[str, Any]) -> None:
