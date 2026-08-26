@@ -3,6 +3,8 @@
 """
 
 import logging
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -17,6 +19,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
 _FORWARD_TIMEOUT = httpx.Timeout(5.0)
+
+# In-memory dedup: prevents double-processing when the same message_id arrives
+# from multiple sources (Evolution retry, n8n forward, etc.)
+_dedup_lock = threading.Lock()
+_seen_ids: dict[str, float] = {}
+_DEDUP_TTL = 300  # seconds
+
+
+def _is_duplicate(message_id: str) -> bool:
+    now = time.time()
+    with _dedup_lock:
+        expired = [k for k, v in _seen_ids.items() if now - v > _DEDUP_TTL]
+        for k in expired:
+            del _seen_ids[k]
+        if message_id in _seen_ids:
+            return True
+        _seen_ids[message_id] = now
+        return False
 
 
 def _extract_text(message: dict[str, Any]) -> str:
@@ -60,9 +80,14 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
         logger.warning("Webhook missing remoteJid or id — skipped")
         return
 
+    # Idempotency guard: drop if this message_id was already processed (Evolution retry, n8n double-forward, etc.)
+    if _is_duplicate(message_id):
+        logger.info("Duplicate message_id=%s — skipped", message_id)
+        return
+
     phone = _phone_from_jid(remote_jid)
     text = _extract_text(message_obj)
-    direction = "outbound" if from_me else "inbound"
+    direction = "inbound"
 
     instance_cfg = get_whatsapp_instance(instance)
     if not instance_cfg:
@@ -76,11 +101,10 @@ def _process_event(instance: str, payload: dict[str, Any]) -> None:
     try:
         contact_id = find_or_create_contact(phone=phone, name=push_name)
         chatwoot_conversation_id = find_or_create_conversation(contact_id=contact_id, inbox_id=inbox_id)
-        chatwoot_message_type = "outgoing" if from_me else "incoming"
         post_message(
             conversation_id=chatwoot_conversation_id,
             content=text,
-            message_type=chatwoot_message_type,
+            message_type="incoming",
         )
     except Exception:
         logger.exception("Chatwoot error for message_id=%s", message_id)
