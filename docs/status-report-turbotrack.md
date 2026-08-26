@@ -1,6 +1,6 @@
 # Status Atual do TurboTrack — Relatório Completo
 
-**Data:** 2026-08-26 | **Autor:** Analista de Projeto | **Issue:** EMP-56
+**Data:** 2026-08-26 | **Último sync EMP-65:** 2026-08-26 | **Autor:** Analista de Projeto | **Issue:** EMP-56
 
 ---
 
@@ -53,8 +53,8 @@
 - `POST /webhook/evolution/{instance}` — recebe MESSAGES_UPSERT da Evolution API
 - `POST /webhook/chatwoot` — recebe replies do agente no Chatwoot e envia via WhatsApp
 - Guard de idempotência por `message_id` (TTL 5min, in-memory)
-- Skip de mensagens `fromMe` para evitar loop infinito
-- Forward para n8n configurável via `WEBHOOK_FORWARD_URL`
+- Forward para n8n via `WEBHOOK_FORWARD_URL` — **todos** os eventos (grupos, outbound, individuais) encaminhados **antes** dos filtros Chatwoot (commit `1c2d992`)
+- Skip de mensagens `fromMe` e grupos (`@g.us`) apenas para o processamento Chatwoot (filtros exclusivos do Chatwoot; n8n já recebeu o evento acima)
 - Serviços: `chatwoot.py` (find_or_create_contact/conversation, post_message) e `evolution.py` (send_text_message)
 
 ✅ **Chatwoot Docker Compose (EMP-52 — pronto, aguardando VPS):**
